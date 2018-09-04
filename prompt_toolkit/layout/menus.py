@@ -47,7 +47,8 @@ class CompletionsMenuControl(UIControl):
         else:
             return 0
 
-    def preferred_height(self, width, max_available_height, wrap_lines):
+    def preferred_height(self, width, max_available_height, wrap_lines,
+                         get_line_prefix):
         complete_state = get_app().current_buffer.complete_state
         if complete_state:
             return len(complete_state.completions)

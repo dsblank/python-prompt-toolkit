@@ -48,7 +48,7 @@ class UIControl(with_metaclass(ABCMeta, object)):
     def preferred_width(self, max_available_width):
         return None
 
-    def preferred_height(self, width, max_available_height, wrap_lines):
+    def preferred_height(self, width, max_available_height, wrap_lines, get_line_prefix):
         return None
 
     def is_focusable(self):
@@ -141,20 +141,67 @@ class UIContent(object):
         else:
             raise IndexError
 
-    def get_height_for_line(self, lineno, width):
+    def get_height_for_line(self, lineno, width, get_line_prefix):
+
+                # TODO: this should also return the newly created text (including the prefix).
+                #       we need that for computing the scroll offset, and
+                #       better not to compute twice.
+
+                # TODO: move this code into "Window" somewhere???
         """
         Return the height that a given line would need if it is rendered in a
-        space with the given width.
+        space with the given width (using line wrapping).
+
+        :param get_line_prefix: None or a `Window.get_line_prefix` callable
+            that returns the prefix to be inserted before this line.
         """
+                     # TODO: maybe if no prefix is given, use the fast path
+                     #       that we had before with the function
+                     #       below!!!!!!!!!!!!!!!!
+        if get_line_prefix is None:
+            get_line_prefix = lambda *a: []
+
+        # Instead of using `get_line_prefix` as key, we use render_counter
+        # instead. This is more reliable, because this function could still be
+        # the same, while the content would change over time.
+        key = get_app().render_counter, lineno, width
+
         try:
-            return self._line_heights[lineno, width]
+            return self._line_heights[key]
         except KeyError:
-            text = fragment_list_to_text(self.get_line(lineno))
-            result = self.get_height_for_text(text, width)
+            if width == 0:
+                height = 10 ** 8
+            else:
+                # Calculate text width first.
+                text = fragment_list_to_text(self.get_line(lineno))
+                text_width = get_cwidth(text)
+
+                # Add prefix of this line.
+                prefix_width = get_cwidth(fragment_list_to_text(to_formatted_text(
+                    get_line_prefix(width, lineno, False))))
+                text_width += prefix_width
+
+                # Keep wrapping as long as the line doesn't fit.
+                # Keep adding new prefixes for every wrapped line.
+                height = 1
+
+                while text_width > width:
+                    height += 1
+                    text_width -= width
+
+                    prefix_text = fragment_list_to_text(to_formatted_text(
+                        get_line_prefix(width, lineno, True)))
+                    prefix_width = get_cwidth(prefix_text)
+
+                    if prefix_width > width:  # Prefix doesn't fit.
+                        height = 10 ** 8
+                        break
+
+                    text_width += prefix_width
 
             # Cache and return
-            self._line_heights[lineno, width] = result
-            return result
+            self._line_heights[key] = height
+            return height
 
     @staticmethod
     def get_height_for_text(text, width):
@@ -271,7 +318,7 @@ class FormattedTextControl(UIControl):
         line_lengths = [get_cwidth(l) for l in text.split('\n')]
         return max(line_lengths)
 
-    def preferred_height(self, width, max_available_height, wrap_lines):
+    def preferred_height(self, width, max_available_height, wrap_lines, get_line_prefix):
         content = self.create_content(width, None)
         return content.line_count
 
@@ -460,7 +507,7 @@ class BufferControl(UIControl):
         self._last_get_processed_line = None
 
     def __repr__(self):
-        return '<%s(buffer=%r at %r>' % (self.__class__.__name__, self.buffer, id(self))
+        return '<%s buffer=%r at %r>' % (self.__class__.__name__, self.buffer, id(self))
 
     @property
     def search_buffer_control(self):
@@ -508,7 +555,7 @@ class BufferControl(UIControl):
         """
         return None
 
-    def preferred_height(self, width, max_available_height, wrap_lines):
+    def preferred_height(self, width, max_available_height, wrap_lines, get_line_prefix):
         # Calculate the content height, if it was drawn on a screen with the
         # given width.
         height = 0
@@ -525,7 +572,7 @@ class BufferControl(UIControl):
             return max_available_height
 
         for i in range(content.line_count):
-            height += content.get_height_for_line(i, width)
+            height += content.get_height_for_line(i, width, get_line_prefix)
 
             if height >= max_available_height:
                 return max_available_height
